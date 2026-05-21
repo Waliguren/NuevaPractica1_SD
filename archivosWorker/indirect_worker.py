@@ -2,6 +2,7 @@ import pika
 import json
 import time
 import random
+import os
 
 REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'localhost')

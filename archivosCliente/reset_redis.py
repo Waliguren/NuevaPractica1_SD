@@ -1,5 +1,6 @@
 import redis
 import sys
+import os
 
 # Cambia esto por la IP privada de tu máquina Redis
 REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')

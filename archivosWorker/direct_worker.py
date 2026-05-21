@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
 import redis.asyncio as redis # Usamos la versión asíncrona de Redis
+import os
 
 app = FastAPI()
 
