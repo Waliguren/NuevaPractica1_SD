@@ -106,14 +106,11 @@ resource "aws_instance" "client" {
               #!/bin/bash
               apt-get update -y && apt-get install -y python3-pip python3-venv git
               cd /home/ubuntu && git clone https://github.com/waliguren/nuevapractica1_sd.git practica && cd practica
+              python3 -m venv venv && venv/bin/pip install aiohttp uvloop redis
               
-              python3 -m venv venv && venv/bin/pip install fastapi uvicorn redis pydantic
-              
-              # MAGIA: Inyectamos la IP en el sistema justo antes de arrancar
-              export REDIS_HOST="${aws_instance.redis.private_ip}"
-              
-              # Arrancamos Uvicorn (heredará la variable exportada)
-              nohup venv/bin/uvicorn archivosWorker.direct_worker:app --host 0.0.0.0 --port 5000 > worker.log 2>&1 &
+              # Guardamos las IPs en el perfil del usuario ubuntu para cuando entres por SSH
+              echo "export NGINX_HOST=${aws_instance.nginx.public_ip}" >> /home/ubuntu/.bashrc
+              echo "export REDIS_HOST=${aws_instance.redis.private_ip}" >> /home/ubuntu/.bashrc
               EOF
 }
 

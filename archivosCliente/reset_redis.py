@@ -2,7 +2,7 @@ import redis
 import sys
 
 # Cambia esto por la IP privada de tu máquina Redis
-REDIS_HOST = "10.0.1.88"
+REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
 REDIS_PASSWORD = "admin123"
 
 def resetear_redis():

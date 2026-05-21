@@ -89,15 +89,11 @@ resource "aws_instance" "client" {
               #!/bin/bash
               apt-get update -y && apt-get install -y python3-pip python3-venv git
               cd /home/ubuntu && git clone https://github.com/waliguren/nuevapractica1_sd.git practica && cd practica
-              
               python3 -m venv venv && venv/bin/pip install pika redis
               
-              # MAGIA: Inyectamos ambas IPs en el sistema
-              export REDIS_HOST="${aws_instance.redis.private_ip}"
-              export RABBITMQ_HOST="${aws_instance.rabbitmq.private_ip}"
-              
-              # Arrancamos el script de Python (heredará las variables)
-              nohup venv/bin/python3 archivosWorker/indirect_worker.py > worker.log 2>&1 &
+              # Guardamos las IPs en el perfil del usuario ubuntu
+              echo "export RABBITMQ_HOST=${aws_instance.rabbitmq.private_ip}" >> /home/ubuntu/.bashrc
+              echo "export REDIS_HOST=${aws_instance.redis.private_ip}" >> /home/ubuntu/.bashrc
               EOF
 }
 
