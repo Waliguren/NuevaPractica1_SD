@@ -134,7 +134,7 @@ resource "aws_instance" "redis" {
 }
 
 resource "aws_instance" "worker" {
-  count                  = 2
+  count                  = 3
   ami                    = data.aws_ami.amazon_linux.id
   instance_type          = "t3.micro"
   key_name               = "clave-rabbitmq-server"
@@ -142,22 +142,38 @@ resource "aws_instance" "worker" {
   tags                   = { Name = "Worker-Direct-${count.index + 1}" }
 
   user_data = <<-EOF
-              #!/bin/bash
-              dnf update -y
-              dnf install -y python3 python3-pip git
-              
-              cd /home/ec2-user
-              git clone https://github.com/waliguren/nuevapractica1_sd.git repo
-              mv repo/archivosWorker ./
-              rm -rf repo
-              
-              cd archivosWorker
-              python3 -m venv venv
-              venv/bin/pip install fastapi uvicorn redis pydantic pika
-              
-              export REDIS_HOST="${aws_instance.redis.private_ip}"
-              nohup venv/bin/uvicorn direct_worker:app --host 0.0.0.0 --port 5000 > worker.log 2>&1 &
-              EOF
+    #!/bin/bash
+    
+    # 1. Ajustes del Kernel
+    echo "fs.file-max = 2097152" >> /etc/sysctl.conf
+    echo "net.core.somaxconn = 65535" >> /etc/sysctl.conf
+    echo "net.ipv4.tcp_max_syn_backlog = 65535" >> /etc/sysctl.conf
+    echo "net.ipv4.ip_local_port_range = 1024 65535" >> /etc/sysctl.conf
+    sysctl -p
+    echo "* soft nofile 65535" >> /etc/security/limits.conf
+    echo "* hard nofile 65535" >> /etc/security/limits.conf
+
+    # 2. Instalación de dependencias y código
+    dnf update -y
+    dnf install -y python3 python3-pip git
+    
+    cd /home/ec2-user
+    git clone https://github.com/waliguren/nuevapractica1_sd.git repo
+    mv repo/archivosWorker ./
+    rm -rf repo
+    
+    cd archivosWorker
+    python3 -m venv venv
+    venv/bin/pip install fastapi uvicorn redis
+    
+    # 3. Inyectar la IP de Redis para que el Worker sepa dónde conectarse
+    echo "export REDIS_HOST=${aws_instance.redis.private_ip}" >> /home/ec2-user/.bashrc
+    export REDIS_HOST=${aws_instance.redis.private_ip}
+
+    # 4. Aplicar el ulimit y arrancar la API
+    ulimit -n 65535
+    nohup venv/bin/uvicorn direct_worker:app --host 0.0.0.0 --port 5000 > worker.log 2>&1 &
+  EOF
 }
 
 resource "aws_instance" "nginx" {
@@ -167,21 +183,30 @@ resource "aws_instance" "nginx" {
   vpc_security_group_ids = [aws_security_group.nginx_sg.id]
   tags                   = { Name = "NGINX-Balancer" }
 
+  user_data_replace_on_change = true
+
   user_data = <<-EOF
     #!/bin/bash
     
-    # 1. Prevención del bloqueo de DNF (Espera a que Amazon Linux termine sus actualizaciones invisibles)
+    # 1. Ajustes del Kernel para alto tráfico (Adiós cuello de botella)
+    echo "fs.file-max = 2097152" >> /etc/sysctl.conf
+    echo "net.core.somaxconn = 65535" >> /etc/sysctl.conf
+    echo "net.ipv4.tcp_max_syn_backlog = 65535" >> /etc/sysctl.conf
+    echo "net.ipv4.ip_local_port_range = 1024 65535" >> /etc/sysctl.conf
+    sysctl -p
+    echo "* soft nofile 65535" >> /etc/security/limits.conf
+    echo "* hard nofile 65535" >> /etc/security/limits.conf
+
+    # 2. Instalación (Prevención de bloqueo DNF)
     while pidof dnf > /dev/null; do sleep 5; done
-    
     dnf update -y
     dnf install -y docker
-    systemctl start docker
-    systemctl enable docker
+    systemctl start docker && systemctl enable docker
     
-    # 2. Generación del archivo NGINX con sintaxis de inyección directa de Terraform
+    # 3. NGINX Config (Aumentamos worker_connections)
     cat <<'EOT' > /home/ec2-user/nginx.conf
     events { 
-        worker_connections 4096; 
+        worker_connections 65535; 
     }
     http { 
         upstream workers_api {
@@ -199,8 +224,8 @@ resource "aws_instance" "nginx" {
     }
     EOT
     
-    # 3. Despliegue del contenedor
-    docker run -d --name mi-nginx --restart unless-stopped -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:latest
+    # 4. Lanzar NGINX pasándole el límite abierto (--ulimit)
+    docker run -d --name mi-nginx --restart unless-stopped --ulimit nofile=65535:65535 -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:latest
   EOF
 }
 
@@ -212,22 +237,37 @@ resource "aws_instance" "client" {
   tags                   = { Name = "Client-Direct" }
 
   user_data = <<-EOF
-              #!/bin/bash
-              dnf update -y
-              dnf install -y python3 python3-pip git
-              
-              cd /home/ec2-user
-              git clone https://github.com/waliguren/nuevapractica1_sd.git repo
-              mv repo/archivosCliente ./
-              rm -rf repo
-              
-              cd archivosCliente
-              python3 -m venv venv
-              venv/bin/pip install aiohttp uvloop redis
-              
-              echo "export NGINX_HOST=${aws_instance.nginx.private_ip}" >> /home/ec2-user/.bashrc
-              echo "export REDIS_HOST=${aws_instance.redis.private_ip}" >> /home/ec2-user/.bashrc
-              EOF
+    #!/bin/bash
+    
+    # 1. Ajustes del Kernel para disparar sin ahogarse
+    echo "fs.file-max = 2097152" >> /etc/sysctl.conf
+    echo "net.core.somaxconn = 65535" >> /etc/sysctl.conf
+    echo "net.ipv4.tcp_max_syn_backlog = 65535" >> /etc/sysctl.conf
+    echo "net.ipv4.ip_local_port_range = 1024 65535" >> /etc/sysctl.conf
+    sysctl -p
+    echo "* soft nofile 65535" >> /etc/security/limits.conf
+    echo "* hard nofile 65535" >> /etc/security/limits.conf
+    
+    # 2. Instalación
+    dnf update -y
+    dnf install -y python3 python3-pip git
+    
+    cd /home/ec2-user
+    git clone https://github.com/waliguren/nuevapractica1_sd.git repo
+    mv repo/archivosCliente ./
+    rm -rf repo
+    
+    cd archivosCliente
+    python3 -m venv venv
+    venv/bin/pip install aiohttp uvloop redis
+    
+    # 3. Variables de entorno
+    echo "export NGINX_HOST=${aws_instance.nginx.private_ip}" >> /home/ec2-user/.bashrc
+    echo "export REDIS_HOST=${aws_instance.redis.private_ip}" >> /home/ec2-user/.bashrc
+    
+    # 4. Hacer que el ulimit se aplique automáticamente al entrar por SSH
+    echo "ulimit -n 65535" >> /home/ec2-user/.bashrc
+  EOF
 }
 
 output "CLIENTE_SSH" { 

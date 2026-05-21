@@ -7,4 +7,5 @@ else
     echo "⚠️ No se encontró el entorno virtual 'venv'. Ejecutando con python3 global..."
 fi
 
-python3 scripts/direct_client.py benchmarks/benchmark_numbered_60000.txt
+# Ejecutamos el cliente pasándole el archivo de prueba
+python3 scripts/indirect_client.py benchmarks/benchmark_numbered_60000.txt
