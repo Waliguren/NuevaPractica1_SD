@@ -10,7 +10,7 @@ def resetear_redis():
     print(f"Conectando a Redis en {REDIS_HOST}...")
     try:
         # Nos conectamos a Redis
-        r = redis.Redis(host=REDIS_HOST, port=6379, password=REDIS_PASSWORD, de>
+        r = redis.Redis(host=REDIS_HOST, port=6379, password=REDIS_PASSWORD, decode_responses=True)
         r.ping() # Comprobamos que la conexión funciona
 
         # 1. Resetear NO numeradas (Ponemos el contador a 20000)

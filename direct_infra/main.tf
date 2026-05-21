@@ -21,7 +21,7 @@ data "aws_ami" "amazon_linux" {
 # ==========================================
 
 resource "aws_security_group" "client_sg" {
-  name = "direct_client_sg"
+  name = "direct_client_sg_v2"
   
   ingress { 
     from_port   = 22
@@ -39,7 +39,7 @@ resource "aws_security_group" "client_sg" {
 }
 
 resource "aws_security_group" "nginx_sg" {
-  name = "direct_nginx_sg"
+  name = "direct_nginx_sg_v2"
   
   ingress { 
     from_port   = 22
@@ -64,7 +64,7 @@ resource "aws_security_group" "nginx_sg" {
 }
 
 resource "aws_security_group" "worker_sg" {
-  name = "direct_worker_sg"
+  name = "direct_worker_sg_v2"
   
   ingress { 
     from_port   = 22
@@ -89,7 +89,7 @@ resource "aws_security_group" "worker_sg" {
 }
 
 resource "aws_security_group" "redis_sg" {
-  name = "direct_redis_sg"
+  name = "direct_redis_sg_v2"
   
   ingress { 
     from_port   = 22
