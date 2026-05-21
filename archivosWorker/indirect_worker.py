@@ -1,59 +1,80 @@
 import pika
-import json
-import time
-import random
+import redis
 import os
+import sys
 
-REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
-RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'localhost')
+# Variables inyectadas por Terraform (o puestas a mano para pruebas locales)
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
+QUEUE_NAME = 'booking_queue'
 
-# Replace with RabbitMQ private IP
-HOST = RABBITMQ_HOST
+# 1. Conexión a Redis
+try:
+    r = redis.Redis(host=REDIS_HOST, port=6379, password="admin123", decode_responses=True)
+    r.ping()
+    print(f"✅ Conectado a Redis en {REDIS_HOST}")
+except Exception as e:
+    print(f"❌ Error conectando a Redis: {e}")
+    sys.exit(1)
 
-credentials = pika.PlainCredentials("admin", "admin123")
-
-connection = pika.BlockingConnection(
-    pika.ConnectionParameters(host=HOST, credentials=credentials)
-)
-
-channel = connection.channel()
-
-# Declare queue
-channel.queue_declare(queue="ticket_queue", durable=True)
-
-r = redis.Redis(host=REDIS_HOST, port=6379, password='admin123', decode_responses=True)
-
-def callback(ch, method, properties, body):
-    """
-    Process messages from the queue.
-    """
-
-    msg = json.loads(body)
+# 2. Conexión a RabbitMQ
+try:
+    credentials = pika.PlainCredentials('admin', 'admin123')
+    parameters = pika.ConnectionParameters(
+        host=RABBITMQ_HOST,
+        port=5672,
+        virtual_host='/',
+        credentials=credentials
+    )
+    connection = pika.BlockingConnection(parameters)
+    channel = connection.channel()
+    channel.queue_declare(queue=QUEUE_NAME, durable=True)
     
-    # Asumiendo que el cliente envía un JSON con el tipo de entrada
-    ticket_type = msg.get("type")
+    # Balanceo de carga: No le mandes a este worker más de 100 mensajes a la vez sin procesar
+    channel.basic_qos(prefetch_count=100)
+    print(f"✅ Conectado a RabbitMQ en {RABBITMQ_HOST}. Esperando trabajo...")
+except Exception as e:
+    print(f"❌ Error conectando a RabbitMQ: {e}")
+    sys.exit(1)
 
-    if ticket_type == "unnumbered":
-        entradas_restantes = r.decr('entradas_disponibles')
-        if entradas_restantes < 0:
-            # Si bajamos de 0, devolvemos el contador a 0
-            r.incr('entradas_disponibles')
-            print("Sold out para entrada no numerada")
-
-    elif ticket_type == "numbered":
-        client_id = msg.get("client_id")
-        seat_id = msg.get("seat_id")
+# 3. La lógica central del Worker
+def procesar_mensaje(ch, method, props, body):
+    peticion = body.decode()
+    
+    # ----------------------------------------------------
+    # LÓGICA DE NEGOCIO (REDIS DOUBLE-BOOKING)
+    # Utilizamos 'setnx' (Set if Not eXists). 
+    # Si la petición ya existe en Redis, devuelve 0. Si es nueva, la guarda y devuelve 1.
+    # ----------------------------------------------------
+    exito = r.setnx(peticion, "vendido")
+    
+    if exito:
+        respuesta_http = "200"
+    else:
+        respuesta_http = "409"
         
-        # HSETNX evita las ventas dobles atómicamente
-        success = r.hsetnx('entradas_numeradas', seat_id, client_id)
-        if success == 0:
-             print(f"Conflicto: El asiento {seat_id} ya estaba vendido")
+    # ----------------------------------------------------
+    # RESPUESTA AL CLIENTE (RPC)
+    # Comprobamos si el cliente especificó un buzón de vuelta (reply_to)
+    # ----------------------------------------------------
+    if props.reply_to and props.correlation_id:
+        ch.basic_publish(
+            exchange='',
+            routing_key=props.reply_to,
+            properties=pika.BasicProperties(
+                correlation_id=props.correlation_id
+            ),
+            body=respuesta_http
+        )
+        
+    # Le decimos a RabbitMQ: "Trabajo terminado, bórralo de la cola principal"
+    ch.basic_ack(delivery_tag=method.delivery_tag)
 
-# Limit messages per worker
-channel.basic_qos(prefetch_count=5)
+# Arrancamos el bucle infinito
+channel.basic_consume(queue=QUEUE_NAME, on_message_callback=procesar_mensaje)
 
-channel.basic_consume(queue="event_queue", on_message_callback=callback)
-
-print("Worker started. Waiting for messages...")
-
-channel.start_consuming()
+try:
+    channel.start_consuming()
+except KeyboardInterrupt:
+    print("\nApagando worker de forma segura...")
+    connection.close()
