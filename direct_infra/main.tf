@@ -119,7 +119,7 @@ resource "aws_security_group" "redis_sg" {
 
 resource "aws_instance" "redis" {
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t2.micro"
+  instance_type          = "t3.micro"
   key_name               = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.redis_sg.id]
   tags                   = { Name = "Redis-Direct" }
@@ -136,7 +136,7 @@ resource "aws_instance" "redis" {
 resource "aws_instance" "worker" {
   count                  = 2
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t2.micro"
+  instance_type          = "t3.micro"
   key_name               = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.worker_sg.id]
   tags                   = { Name = "Worker-Direct-${count.index + 1}" }
@@ -162,46 +162,51 @@ resource "aws_instance" "worker" {
 
 resource "aws_instance" "nginx" {
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t2.micro"
+  instance_type          = "t3.small"
   key_name               = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.nginx_sg.id]
   tags                   = { Name = "NGINX-Balancer" }
 
   user_data = <<-EOF
-              #!/bin/bash
-              dnf update -y
-              dnf install -y docker
-              systemctl start docker && systemctl enable docker
-              
-              cat <<EOT > /home/ec2-user/nginx.conf
-              events { 
-                  worker_connections 4096; 
-              }
-              http { 
-                  upstream workers_api {
-                      %{~ for w in aws_instance.worker ~}
-                      server ${w.private_ip}:5000;
-                      %{~ endfor ~}
-                  }
-                  server { 
-                      listen 80;
-                      location / { 
-                          proxy_pass http://workers_api;
-                          proxy_connect_timeout 300s; 
-                          proxy_send_timeout 300s; 
-                          proxy_read_timeout 300s; 
-                      } 
-                  } 
-              }
-              EOT
-              
-              docker run -d --name mi-nginx --restart unless-stopped -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:latest
-              EOF
+    #!/bin/bash
+    
+    # 1. Prevención del bloqueo de DNF (Espera a que Amazon Linux termine sus actualizaciones invisibles)
+    while pidof dnf > /dev/null; do sleep 5; done
+    
+    dnf update -y
+    dnf install -y docker
+    systemctl start docker
+    systemctl enable docker
+    
+    # 2. Generación del archivo NGINX con sintaxis de inyección directa de Terraform
+    cat <<'EOT' > /home/ec2-user/nginx.conf
+    events { 
+        worker_connections 4096; 
+    }
+    http { 
+        upstream workers_api {
+            ${join("\n            ", [for w in aws_instance.worker : "server ${w.private_ip}:5000;"])}
+        }
+        server { 
+            listen 80;
+            location / { 
+                proxy_pass http://workers_api;
+                proxy_connect_timeout 300s; 
+                proxy_send_timeout 300s; 
+                proxy_read_timeout 300s; 
+            } 
+        } 
+    }
+    EOT
+    
+    # 3. Despliegue del contenedor
+    docker run -d --name mi-nginx --restart unless-stopped -p 80:80 -v /home/ec2-user/nginx.conf:/etc/nginx/nginx.conf:ro nginx:latest
+  EOF
 }
 
 resource "aws_instance" "client" {
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t2.micro"
+  instance_type          = "t3.micro"
   key_name               = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.client_sg.id]
   tags                   = { Name = "Client-Direct" }
@@ -220,7 +225,7 @@ resource "aws_instance" "client" {
               python3 -m venv venv
               venv/bin/pip install aiohttp uvloop redis
               
-              echo "export NGINX_HOST=${aws_instance.nginx.public_ip}" >> /home/ec2-user/.bashrc
+              echo "export NGINX_HOST=${aws_instance.nginx.private_ip}" >> /home/ec2-user/.bashrc
               echo "export REDIS_HOST=${aws_instance.redis.private_ip}" >> /home/ec2-user/.bashrc
               EOF
 }

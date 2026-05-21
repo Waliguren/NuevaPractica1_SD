@@ -37,7 +37,7 @@ resource "aws_security_group" "redis_sg" {
 
 # INSTANCIAS
 resource "aws_instance" "redis" {
-  ami = data.aws_ami.ubuntu.id; instance_type = "t2.micro"; key_name = "clave-rabbitmq-server"
+  ami = data.aws_ami.ubuntu.id; instance_type = "t3.micro"; key_name = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.redis_sg.id]
   tags = { Name = "Redis-Indirect" }
   user_data = <<-EOF
@@ -49,7 +49,7 @@ resource "aws_instance" "redis" {
 }
 
 resource "aws_instance" "rabbitmq" {
-  ami = data.aws_ami.ubuntu.id; instance_type = "t2.micro"; key_name = "clave-rabbitmq-server"
+  ami = data.aws_ami.ubuntu.id; instance_type = "t3.small"; key_name = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.rabbitmq_sg.id]
   tags = { Name = "RabbitMQ-Server" }
   user_data = <<-EOF
@@ -62,7 +62,7 @@ resource "aws_instance" "rabbitmq" {
 
 resource "aws_instance" "worker" {
   count = 2
-  ami = data.aws_ami.ubuntu.id; instance_type = "t2.micro"; key_name = "clave-rabbitmq-server"
+  ami = data.aws_ami.ubuntu.id; instance_type = "t3.micro"; key_name = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.worker_sg.id]
   tags = { Name = "Worker-Indirect-${count.index + 1}" }
   user_data = <<-EOF
@@ -82,7 +82,7 @@ resource "aws_instance" "worker" {
 }
 
 resource "aws_instance" "client" {
-  ami = data.aws_ami.ubuntu.id; instance_type = "t2.micro"; key_name = "clave-rabbitmq-server"
+  ami = data.aws_ami.ubuntu.id; instance_type = "t3.micro"; key_name = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.client_sg.id]
   tags = { Name = "Client-Indirect" }
   user_data = <<-EOF
