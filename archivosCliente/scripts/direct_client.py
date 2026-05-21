@@ -4,7 +4,8 @@ import time
 import sys
 
 # PON AQUÍ LA IP DE TU MÁQUINA NGINX (O DEL WORKER SI PRUEBAS CON UNO SOLO)
-BASE_URL = "http://IP_DE_TU_NGINX"
+NGINX_HOST = os.environ.get('NGINX_HOST', 'localhost')
+BASE_URL = f"http://{NGINX_HOST}"
 
 async def send_request(session, url, payload, sem, stats):
     # El semáforo evita que el cliente colapse por intentar abrir 60.000 puertos en el mismo milisegundo

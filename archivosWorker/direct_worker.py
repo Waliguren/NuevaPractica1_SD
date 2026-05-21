@@ -6,7 +6,9 @@ app = FastAPI()
 
 # Conexión a Redis (Cambia la IP_REDIS y la contraseña)
 # decode_responses=True hace que Redis nos devuelva texto normal y no bytes.
-r = redis.Redis(host='10.0.1.88', port=6379, password='admin123', decode_responses=True)
+REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
+
+r = redis.Redis(host=REDIS_HOST, port=6379, password='admin123', decode_responses=True)
 
 # 1. Definimos qué forma tiene el JSON que nos va a mandar el cliente
 class UnnumberedRequest(BaseModel):

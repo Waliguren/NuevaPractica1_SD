@@ -3,8 +3,11 @@ import json
 import time
 import random
 
+REDIS_HOST = os.environ.get('REDIS_HOST', 'localhost')
+RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'localhost')
+
 # Replace with RabbitMQ private IP
-HOST = "10.0.1.117"
+HOST = RABBITMQ_HOST
 
 credentials = pika.PlainCredentials("admin", "admin123")
 
@@ -17,7 +20,7 @@ channel = connection.channel()
 # Declare queue
 channel.queue_declare(queue="ticket_queue", durable=True)
 
-r = redis.Redis(host='10.0.1.88', port=6379, password='admin123', decode_responses=True)
+r = redis.Redis(host=REDIS_HOST, port=6379, password='admin123', decode_responses=True)
 
 def callback(ch, method, properties, body):
     """
