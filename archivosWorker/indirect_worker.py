@@ -2,39 +2,46 @@ import pika
 import redis
 import os
 import sys
+import time
 
 # Variables inyectadas por Terraform (o puestas a mano para pruebas locales)
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
 QUEUE_NAME = 'booking_queue'
 
-# 1. Conexión a Redis
-try:
-    r = redis.Redis(host=REDIS_HOST, port=6379, password="admin123", decode_responses=True)
-    r.ping()
-    print(f"✅ Conectado a Redis en {REDIS_HOST}")
-except Exception as e:
-    print(f"❌ Error conectando a Redis: {e}")
+# 1. Conexión a Redis con paciencia (Reintentos)
+max_reintentos = 12
+for i in range(max_reintentos):
+    try:
+        r = redis.Redis(host=REDIS_HOST, port=6379, password="admin123", decode_responses=True)
+        r.ping()
+        print(f"✅ Conectado a Redis en {REDIS_HOST}")
+        break  # Si conecta bien, rompemos el bucle
+    except Exception as e:
+        print(f"⚠️ Redis no responde. Reintentando en 5 segundos... ({i+1}/{max_reintentos})")
+        time.sleep(5)
+else:
+    print("❌ Imposible conectar a Redis tras 60 segundos. Apagando worker.")
     sys.exit(1)
 
-# 2. Conexión a RabbitMQ
-try:
-    credentials = pika.PlainCredentials('admin', 'admin123')
-    parameters = pika.ConnectionParameters(
-        host=RABBITMQ_HOST,
-        port=5672,
-        virtual_host='/',
-        credentials=credentials
-    )
-    connection = pika.BlockingConnection(parameters)
-    channel = connection.channel()
-    channel.queue_declare(queue=QUEUE_NAME, durable=True)
-    
-    # Balanceo de carga: No le mandes a este worker más de 100 mensajes a la vez sin procesar
-    channel.basic_qos(prefetch_count=100)
-    print(f"✅ Conectado a RabbitMQ en {RABBITMQ_HOST}. Esperando trabajo...")
-except Exception as e:
-    print(f"❌ Error conectando a RabbitMQ: {e}")
+# 2. Conexión a RabbitMQ con paciencia (Reintentos)
+for i in range(max_reintentos):
+    try:
+        credentials = pika.PlainCredentials('admin', 'admin123')
+        parameters = pika.ConnectionParameters(
+            host=RABBITMQ_HOST, port=5672, virtual_host='/', credentials=credentials
+        )
+        connection = pika.BlockingConnection(parameters)
+        channel = connection.channel()
+        channel.queue_declare(queue=QUEUE_NAME, durable=True)
+        channel.basic_qos(prefetch_count=100)
+        print(f"✅ Conectado a RabbitMQ en {RABBITMQ_HOST}. Esperando trabajo...")
+        break
+    except Exception as e:
+        print(f"⚠️ RabbitMQ no responde. Reintentando en 5 segundos... ({i+1}/{max_reintentos})")
+        time.sleep(5)
+else:
+    print("❌ Imposible conectar a RabbitMQ. Apagando worker.")
     sys.exit(1)
 
 # 3. La lógica central del Worker
