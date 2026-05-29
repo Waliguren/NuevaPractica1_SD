@@ -11,10 +11,14 @@ def resetear_redis():
         r = redis.Redis(host=REDIS_HOST, port=6379, password=REDIS_PASSWORD, decode_responses=True)
         r.ping() 
 
+        # 1. EL BOTÓN NUCLEAR: Borramos absolutamente todo lo que haya en la BD
+        r.flushdb()
+        print("🧹 Base de datos limpiada por completo (asientos vaciados).")
+
+        # 2. Inicializamos de nuevo solo lo que necesita el otro benchmark
         r.set('entradas_disponibles', 20000)
         print("✅ Entradas NO numeradas: Contador reseteado a 20.000")
-
-        r.delete('entradas_numeradas')
+        
         print("✅ Entradas NUMERADAS: Todos los asientos han sido liberados")
 
         print("\n🚀 ¡Base de datos limpia y lista para el próximo benchmark!")
