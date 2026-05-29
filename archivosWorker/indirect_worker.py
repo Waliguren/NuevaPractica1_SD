@@ -41,22 +41,29 @@ except Exception as e:
 def procesar_mensaje(ch, method, props, body):
     peticion = body.decode()
     
-    # ----------------------------------------------------
-    # LÓGICA DE NEGOCIO (REDIS DOUBLE-BOOKING)
-    # Utilizamos 'setnx' (Set if Not eXists). 
-    # Si la petición ya existe en Redis, devuelve 0. Si es nueva, la guarda y devuelve 1.
-    # ----------------------------------------------------
-    exito = r.setnx(peticion, "vendido")
+    # 1. Extraemos el asiento real de la petición cruda
+    try:
+        if "HTTP" in peticion:
+            # De "GET /buy/numbered/1234 HTTP/1.1" sacamos el "1234"
+            ruta = peticion.split(" ")[1] 
+            asiento = ruta.split("/")[-1] 
+        else:
+            asiento = peticion.strip()
+    except:
+        asiento = peticion # Por si el formato es distinto
+        
+    # 2. LÓGICA DE NEGOCIO (REDIS DOUBLE-BOOKING)
+    exito = r.setnx(f"asiento_{asiento}", "vendido")
     
     if exito:
         respuesta_http = "200"
     else:
         respuesta_http = "409"
         
-    # ----------------------------------------------------
-    # RESPUESTA AL CLIENTE (RPC)
-    # Comprobamos si el cliente especificó un buzón de vuelta (reply_to)
-    # ----------------------------------------------------
+    # --- AQUÍ ESTÁ TU MONITORIZACIÓN EN DIRECTO ---
+    print(f"📩 Asiento {asiento} procesado. Resultado: {respuesta_http}")
+        
+    # 3. RESPUESTA AL CLIENTE (RPC)
     if props.reply_to and props.correlation_id:
         ch.basic_publish(
             exchange='',
@@ -65,9 +72,7 @@ def procesar_mensaje(ch, method, props, body):
                 correlation_id=props.correlation_id
             ),
             body=respuesta_http
-        )
-        
-    # Le decimos a RabbitMQ: "Trabajo terminado, bórralo de la cola principal"
+        )    
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 # Arrancamos el bucle infinito
