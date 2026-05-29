@@ -8,4 +8,4 @@ else
 fi
 
 # Ejecutamos el cliente pasándole el archivo de prueba
-python3 scripts/indirect_client.py benchmarks/benchmark_benchmark_unnumbered_20000.txt
+python3 scripts/indirect_client.py benchmarks/benchmark_unnumbered_20000.txt
