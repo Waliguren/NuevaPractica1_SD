@@ -1,18 +1,18 @@
-provider "aws" { 
-  region = "us-east-1" 
+provider "aws" {
+  region = "us-east-1"
 }
 
 data "aws_ami" "amazon_linux" {
   most_recent = true
   owners      = ["amazon"]
 
-  filter { 
+  filter {
     name   = "name"
-    values = ["al2023-ami-2023.*-x86_64"] 
+    values = ["al2023-ami-2023.*-x86_64"]
   }
-  filter { 
+  filter {
     name   = "virtualization-type"
-    values = ["hvm"] 
+    values = ["hvm"]
   }
 }
 
@@ -21,87 +21,87 @@ data "aws_ami" "amazon_linux" {
 # ==========================================
 resource "aws_security_group" "client_sg" {
   name = "indirect_client_sg"
-  
-  ingress { 
+
+  ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
-  egress { 
+  egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
 resource "aws_security_group" "rabbitmq_sg" {
   name = "indirect_rabbitmq_sg"
-  
-  ingress { 
+
+  ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
-  ingress { 
+  ingress {
     from_port   = 15672
     to_port     = 15672
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   } # Panel Web UI
-  ingress { 
+  ingress {
     from_port   = 5672
     to_port     = 5672
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   } # AMQP para Workers y Cliente
-  egress { 
+  egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
 resource "aws_security_group" "worker_sg" {
   name = "indirect_worker_sg"
-  
-  ingress { 
+
+  ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
-  egress { 
+  egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
 resource "aws_security_group" "redis_sg" {
   name = "indirect_redis_sg"
-  
-  ingress { 
+
+  ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
-  ingress { 
+  ingress {
     from_port       = 6379
     to_port         = 6379
     protocol        = "tcp"
-    security_groups = [aws_security_group.worker_sg.id, aws_security_group.client_sg.id] 
+    security_groups = [aws_security_group.worker_sg.id, aws_security_group.client_sg.id]
   }
-  egress { 
+  egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
@@ -114,7 +114,7 @@ resource "aws_instance" "redis" {
   key_name               = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.redis_sg.id]
   tags                   = { Name = "Redis-Indirect" }
-  
+
   user_data = <<-EOF
     #!/bin/bash
     while pidof dnf > /dev/null; do sleep 5; done
@@ -130,7 +130,7 @@ resource "aws_instance" "rabbitmq" {
   key_name               = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.rabbitmq_sg.id]
   tags                   = { Name = "RabbitMQ-Server" }
-  
+
   user_data = <<-EOF
     #!/bin/bash
     # Límites de Kernel para absorber la cola masiva
@@ -158,7 +158,7 @@ resource "aws_instance" "worker" {
   key_name               = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.worker_sg.id]
   tags                   = { Name = "Worker-Indirect-${count.index + 1}" }
-  
+
   user_data = <<-EOF
     #!/bin/bash
     # Límites de red para los workers
@@ -178,11 +178,80 @@ resource "aws_instance" "worker" {
     mv repo/archivosWorker ./
     rm -rf repo
     
-    cd archivosWorker
+    # Sustituir worker por version corregida (parseo de mensajes + entradas no numeradas)
+    python3 << 'PYEOF' > /home/ec2-user/archivosWorker/indirect_worker.py
+import pika
+import redis
+import os
+import sys
+import time
+
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
+QUEUE_NAME = 'booking_queue'
+
+max_reintentos = 12
+for i in range(max_reintentos):
+    try:
+        r = redis.Redis(host=REDIS_HOST, port=6379, password="admin123", decode_responses=True)
+        r.ping()
+        print(f"Conectado a Redis en {REDIS_HOST}")
+        break
+    except Exception as e:
+        print(f"Redis no responde. Reintentando en 5s... ({i+1}/{max_reintentos})")
+        time.sleep(5)
+else:
+    print("Imposible conectar a Redis. Apagando worker.")
+    sys.exit(1)
+
+for i in range(max_reintentos):
+    try:
+        credentials = pika.PlainCredentials('admin', 'admin123')
+        parameters = pika.ConnectionParameters(host=RABBITMQ_HOST, port=5672, virtual_host='/', credentials=credentials)
+        connection = pika.BlockingConnection(parameters)
+        channel = connection.channel()
+        channel.queue_declare(queue=QUEUE_NAME, durable=True)
+        channel.basic_qos(prefetch_count=100)
+        print(f"Conectado a RabbitMQ en {RABBITMQ_HOST}. Esperando trabajo...")
+        break
+    except:
+        print(f"RabbitMQ no responde. Reintentando en 5s... ({i+1}/{max_reintentos})")
+        time.sleep(5)
+else:
+    print("Imposible conectar a RabbitMQ. Apagando worker.")
+    sys.exit(1)
+
+def procesar_mensaje(ch, method, props, body):
+    peticion = body.decode().strip()
+    partes = peticion.split()
+    if len(partes) < 2 or partes[0] != "BUY":
+        respuesta_http = "400"
+    elif len(partes) == 3:
+        disponibles = r.decr('entradas_disponibles')
+        if disponibles >= 0:
+            respuesta_http = "200"
+        else:
+            r.incr('entradas_disponibles')
+            respuesta_http = "400"
+    elif len(partes) == 4:
+        asiento = partes[2]
+        exito = r.setnx(f"asiento_{asiento}", "vendido")
+        respuesta_http = "200" if exito else "409"
+    else:
+        respuesta_http = "400"
+    print(f"{peticion} -> {respuesta_http}")
+    if props.reply_to and props.correlation_id:
+        ch.basic_publish(exchange='', routing_key=props.reply_to, properties=pika.BasicProperties(correlation_id=props.correlation_id), body=respuesta_http)
+    ch.basic_ack(delivery_tag=method.delivery_tag)
+
+channel.basic_consume(queue=QUEUE_NAME, on_message_callback=procesar_mensaje)
+try:
+    channel.start_consuming()
+except KeyboardInterrupt:
+    connection.close()
+PYEOF
     
-    # Inyectar la IP de Redis Y DE RABBITMQ
-    sed -i 's/IP_DE_TU_REDIS/${aws_instance.redis.private_ip}/g' indirect_worker.py
-    sed -i 's/IP_DE_RABBITMQ/${aws_instance.rabbitmq.private_ip}/g' indirect_worker.py
+    cd archivosWorker
     
     # Añadimos variables de entorno
     echo "export REDIS_HOST=${aws_instance.redis.private_ip}" >> /home/ec2-user/.bashrc
@@ -203,7 +272,7 @@ resource "aws_instance" "client" {
   key_name               = "clave-rabbitmq-server"
   vpc_security_group_ids = [aws_security_group.client_sg.id]
   tags                   = { Name = "Client-Indirect" }
-  
+
   user_data = <<-EOF
     #!/bin/bash
     # Límites de red para el cliente
@@ -226,6 +295,17 @@ resource "aws_instance" "client" {
     cd archivosCliente
     python3 -m venv venv && venv/bin/pip install pika redis aiohttp uvloop
     
+    # Generar benchmark de alta contencion (80% en 5% asientos)
+    python3 << 'PYEOF'
+import random
+random.seed(42)
+with open('benchmarks/benchmark_numbered_hotspot.txt', 'w') as f:
+    for i in range(60000):
+        seat = random.randint(1, 1000) if i < 48000 else random.randint(1001, 20000)
+        f.write(f'BUY user{i+1:05d} {seat} {i+1:05d}\n')
+print('Benchmark hotspot generado: 48000/60000 en asientos 1-1000')
+PYEOF
+    
     # Guardamos las IPs para el cliente y el ulimit automático
     echo "export RABBITMQ_HOST=${aws_instance.rabbitmq.private_ip}" >> /home/ec2-user/.bashrc
     echo "export REDIS_HOST=${aws_instance.redis.private_ip}" >> /home/ec2-user/.bashrc
@@ -233,10 +313,10 @@ resource "aws_instance" "client" {
   EOF
 }
 
-output "RABBITMQ_PANEL_WEB" { 
-  value = "http://${aws_instance.rabbitmq.public_ip}:15672 (user: admin / pass: admin123)" 
+output "RABBITMQ_PANEL_WEB" {
+  value = "http://${aws_instance.rabbitmq.public_ip}:15672 (user: admin / pass: admin123)"
 }
 
-output "CLIENTE_SSH" { 
-  value = "ssh -i clave-rabbitmq-server.pem ec2-user@${aws_instance.client.public_ip}" 
+output "CLIENTE_SSH" {
+  value = "ssh -i clave-rabbitmq-server.pem ec2-user@${aws_instance.client.public_ip}"
 }

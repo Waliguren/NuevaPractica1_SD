@@ -1,18 +1,18 @@
-provider "aws" { 
-  region = "us-east-1" 
+provider "aws" {
+  region = "us-east-1"
 }
 
 data "aws_ami" "amazon_linux" {
   most_recent = true
   owners      = ["amazon"]
 
-  filter { 
+  filter {
     name   = "name"
-    values = ["al2023-ami-2023.*-x86_64"] 
+    values = ["al2023-ami-2023.*-x86_64"]
   }
-  filter { 
+  filter {
     name   = "virtualization-type"
-    values = ["hvm"] 
+    values = ["hvm"]
   }
 }
 
@@ -22,94 +22,94 @@ data "aws_ami" "amazon_linux" {
 
 resource "aws_security_group" "client_sg" {
   name = "direct_client_sg_v2"
-  
-  ingress { 
+
+  ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
-  
-  egress { 
+
+  egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
 resource "aws_security_group" "nginx_sg" {
   name = "direct_nginx_sg_v2"
-  
-  ingress { 
+
+  ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
-  
-  ingress { 
+
+  ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
-  
-  egress { 
+
+  egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
 resource "aws_security_group" "worker_sg" {
   name = "direct_worker_sg_v2"
-  
-  ingress { 
+
+  ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
-  
-  ingress { 
+
+  ingress {
     from_port       = 5000
     to_port         = 5000
     protocol        = "tcp"
-    security_groups = [aws_security_group.nginx_sg.id] 
+    security_groups = [aws_security_group.nginx_sg.id]
   }
-  
-  egress { 
+
+  egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
 resource "aws_security_group" "redis_sg" {
   name = "direct_redis_sg_v2"
-  
-  ingress { 
+
+  ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
-  
-  ingress { 
+
+  ingress {
     from_port       = 6379
     to_port         = 6379
     protocol        = "tcp"
-    security_groups = [aws_security_group.worker_sg.id, aws_security_group.client_sg.id] 
+    security_groups = [aws_security_group.worker_sg.id, aws_security_group.client_sg.id]
   }
-  
-  egress { 
+
+  egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] 
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
@@ -261,6 +261,17 @@ resource "aws_instance" "client" {
     python3 -m venv venv
     venv/bin/pip install aiohttp uvloop redis
     
+    # Generar benchmark de alta contencion (80% en 5% asientos)
+    python3 << 'PYEOF'
+import random
+random.seed(42)
+with open('benchmarks/benchmark_numbered_hotspot.txt', 'w') as f:
+    for i in range(60000):
+        seat = random.randint(1, 1000) if i < 48000 else random.randint(1001, 20000)
+        f.write(f'BUY user{i+1:05d} {seat} {i+1:05d}\n')
+print('Benchmark hotspot generado: 48000/60000 en asientos 1-1000')
+PYEOF
+    
     # 3. Variables de entorno
     echo "export NGINX_HOST=${aws_instance.nginx.private_ip}" >> /home/ec2-user/.bashrc
     echo "export REDIS_HOST=${aws_instance.redis.private_ip}" >> /home/ec2-user/.bashrc
@@ -270,6 +281,6 @@ resource "aws_instance" "client" {
   EOF
 }
 
-output "CLIENTE_SSH" { 
-  value = "ssh -i clave-rabbitmq-server.pem ec2-user@${aws_instance.client.public_ip}" 
+output "CLIENTE_SSH" {
+  value = "ssh -i clave-rabbitmq-server.pem ec2-user@${aws_instance.client.public_ip}"
 }
