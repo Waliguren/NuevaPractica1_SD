@@ -49,50 +49,41 @@ else:
 def procesar_mensaje(ch, method, props, body):
     peticion = body.decode()
     
-    # ========================================================
-    # CASO 1: ENTRADAS NO NUMERADAS (El límite de 20.000)
-    # ========================================================
-    if "unnumbered" in peticion.lower():
-        # Restamos 1 de forma atómica (Thread-safe)
+    # 1. Detectar si es numerada o no numerada
+    try:
+        datos = json.loads(peticion)
+        # Si tiene seat_id es numerada, si no, es no numerada
+        es_numerada = "seat_id" in datos
+    except:
+        # Respaldo por si mandas texto crudo
+        es_numerada = "unnumbered" not in peticion.lower()
+
+    # ----------------------------------------------------
+    if not es_numerada:
+        # LÓGICA NO NUMERADAS (Límite 20.000)
         entradas_restantes = r.decr('entradas_disponibles')
-        
         if entradas_restantes >= 0:
             respuesta_http = "200"
-            print(f"📩 No numerada VENDIDA. Quedan: {entradas_restantes}")
         else:
-            # Si bajamos de cero, lo devolvemos a 0 y rechazamos
-            r.incr('entradas_disponibles')
-            respuesta_http = "409" # Rechazo por Sold out
-            print(f"📩 No numerada RECHAZADA (Sold out)")
-
-    # ========================================================
-    # CASO 2: ENTRADAS NUMERADAS (El Double-Booking y Hotspot)
-    # ========================================================
+            r.incr('entradas_disponibles') # Devolvemos a 0
+            respuesta_http = "409"
+            
+    # ----------------------------------------------------
     else:
+        # LÓGICA NUMERADAS (Hotspot / Double Booking)
         try:
-            # 1. Intentamos leerlo como diccionario JSON (Ideal para el hotspot)
-            datos = json.loads(peticion)
             asiento = datos["seat_id"]
         except:
-            # 2. Si falla (no es JSON), usamos el formato texto/HTTP de rescate
-            if "HTTP" in peticion:
-                ruta = peticion.split(" ")[1] 
-                asiento = ruta.split("/")[-1] 
-            else:
-                asiento = peticion.strip()
-                
+            asiento = peticion.strip()
+            
         exito = r.setnx(f"asiento_{asiento}", "vendido")
-        
         if exito:
             respuesta_http = "200"
-            print(f"📩 Asiento {asiento} VENDIDO.")
         else:
             respuesta_http = "409"
-            print(f"📩 Asiento {asiento} RECHAZADO (Ocupado).")
             
-    # ========================================================
-    # RESPUESTA AL CLIENTE (RPC)
-    # ========================================================
+    # ----------------------------------------------------
+    # RESPUESTA AL CLIENTE
     if props.reply_to and props.correlation_id:
         ch.basic_publish(
             exchange='',
