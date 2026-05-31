@@ -44,33 +44,52 @@ else:
     print("❌ Imposible conectar a RabbitMQ. Apagando worker.")
     sys.exit(1)
 
-# 3. La lógica central del Worker
+## 3. La lógica central del Worker
 def procesar_mensaje(ch, method, props, body):
     peticion = body.decode()
     
-    # 1. Extraemos el asiento real de la petición cruda
-    try:
-        if "HTTP" in peticion:
-            # De "GET /buy/numbered/1234 HTTP/1.1" sacamos el "1234"
-            ruta = peticion.split(" ")[1] 
-            asiento = ruta.split("/")[-1] 
+    # ========================================================
+    # CASO 1: ENTRADAS NO NUMERADAS (El límite de 20.000)
+    # ========================================================
+    if "unnumbered" in peticion.lower():
+        # Restamos 1 de forma atómica (Thread-safe)
+        entradas_restantes = r.decr('entradas_disponibles')
+        
+        if entradas_restantes >= 0:
+            respuesta_http = "200"
+            print(f"📩 No numerada VENDIDA. Quedan: {entradas_restantes}")
         else:
-            asiento = peticion.strip()
-    except:
-        asiento = peticion # Por si el formato es distinto
-        
-    # 2. LÓGICA DE NEGOCIO (REDIS DOUBLE-BOOKING)
-    exito = r.setnx(f"asiento_{asiento}", "vendido")
-    
-    if exito:
-        respuesta_http = "200"
+            # Si bajamos de cero, lo devolvemos a 0 y rechazamos
+            r.incr('entradas_disponibles')
+            respuesta_http = "400" # O 409, según espere tu script de cliente
+            print(f"📩 No numerada RECHAZADA (Sold out)")
+
+    # ========================================================
+    # CASO 2: ENTRADAS NUMERADAS (El Double-Booking)
+    # ========================================================
     else:
-        respuesta_http = "409"
+        # Extraemos el asiento real de la petición cruda
+        try:
+            if "HTTP" in peticion:
+                ruta = peticion.split(" ")[1] 
+                asiento = ruta.split("/")[-1] 
+            else:
+                asiento = peticion.strip()
+        except:
+            asiento = peticion
+            
+        exito = r.setnx(f"asiento_{asiento}", "vendido")
         
-    # --- AQUÍ ESTÁ TU MONITORIZACIÓN EN DIRECTO ---
-    print(f"📩 Asiento {asiento} procesado. Resultado: {respuesta_http}")
-        
-    # 3. RESPUESTA AL CLIENTE (RPC)
+        if exito:
+            respuesta_http = "200"
+            print(f"📩 Asiento {asiento} VENDIDO.")
+        else:
+            respuesta_http = "409"
+            print(f"📩 Asiento {asiento} RECHAZADO (Ocupado).")
+            
+    # ========================================================
+    # RESPUESTA AL CLIENTE (RPC)
+    # ========================================================
     if props.reply_to and props.correlation_id:
         ch.basic_publish(
             exchange='',
