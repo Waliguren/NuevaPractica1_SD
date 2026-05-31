@@ -3,6 +3,7 @@ import redis
 import os
 import sys
 import time
+import json
 
 # Variables inyectadas por Terraform (o puestas a mano para pruebas locales)
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
@@ -44,7 +45,7 @@ else:
     print("❌ Imposible conectar a RabbitMQ. Apagando worker.")
     sys.exit(1)
 
-## 3. La lógica central del Worker
+# 3. La lógica central del Worker
 def procesar_mensaje(ch, method, props, body):
     peticion = body.decode()
     
@@ -61,23 +62,25 @@ def procesar_mensaje(ch, method, props, body):
         else:
             # Si bajamos de cero, lo devolvemos a 0 y rechazamos
             r.incr('entradas_disponibles')
-            respuesta_http = "400" # O 409, según espere tu script de cliente
+            respuesta_http = "409" # Rechazo por Sold out
             print(f"📩 No numerada RECHAZADA (Sold out)")
 
     # ========================================================
-    # CASO 2: ENTRADAS NUMERADAS (El Double-Booking)
+    # CASO 2: ENTRADAS NUMERADAS (El Double-Booking y Hotspot)
     # ========================================================
     else:
-        # Extraemos el asiento real de la petición cruda
         try:
+            # 1. Intentamos leerlo como diccionario JSON (Ideal para el hotspot)
+            datos = json.loads(peticion)
+            asiento = datos["seat_id"]
+        except:
+            # 2. Si falla (no es JSON), usamos el formato texto/HTTP de rescate
             if "HTTP" in peticion:
                 ruta = peticion.split(" ")[1] 
                 asiento = ruta.split("/")[-1] 
             else:
                 asiento = peticion.strip()
-        except:
-            asiento = peticion
-            
+                
         exito = r.setnx(f"asiento_{asiento}", "vendido")
         
         if exito:
