@@ -46,32 +46,30 @@ else:
 
 # 3. La lógica central del Worker
 def procesar_mensaje(ch, method, props, body):
-    peticion = body.decode().strip()
-    partes = peticion.split()
+    peticion = body.decode()
     
-    if len(partes) < 2 or partes[0] != "BUY":
-        respuesta_http = "400"
-    
-    elif len(partes) == 3:
-        # Formato: BUY <client_id> <request_id> → Entrada NO numerada
-        disponibles = r.decr('entradas_disponibles')
-        if disponibles >= 0:
-            respuesta_http = "200"
+    # 1. Extraemos el asiento real de la petición cruda
+    try:
+        if "HTTP" in peticion:
+            # De "GET /buy/numbered/1234 HTTP/1.1" sacamos el "1234"
+            ruta = peticion.split(" ")[1] 
+            asiento = ruta.split("/")[-1] 
         else:
-            r.incr('entradas_disponibles')
-            respuesta_http = "400"
+            asiento = peticion.strip()
+    except:
+        asiento = peticion # Por si el formato es distinto
+        
+    # 2. LÓGICA DE NEGOCIO (REDIS DOUBLE-BOOKING)
+    exito = r.setnx(f"asiento_{asiento}", "vendido")
     
-    elif len(partes) == 4:
-        # Formato: BUY <client_id> <seat_id> <request_id> → Entrada NUMERADA
-        asiento = partes[2]
-        exito = r.setnx(f"asiento_{asiento}", "vendido")
-        respuesta_http = "200" if exito else "409"
-    
+    if exito:
+        respuesta_http = "200"
     else:
-        respuesta_http = "400"
-    
-    print(f"📩 {peticion} → {respuesta_http}")
-    
+        respuesta_http = "409"
+        
+    # --- AQUÍ ESTÁ TU MONITORIZACIÓN EN DIRECTO ---
+    print(f"📩 Asiento {asiento} procesado. Resultado: {respuesta_http}")
+        
     # 3. RESPUESTA AL CLIENTE (RPC)
     if props.reply_to and props.correlation_id:
         ch.basic_publish(
@@ -81,7 +79,7 @@ def procesar_mensaje(ch, method, props, body):
                 correlation_id=props.correlation_id
             ),
             body=respuesta_http
-        )
+        )    
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 # Arrancamos el bucle infinito
