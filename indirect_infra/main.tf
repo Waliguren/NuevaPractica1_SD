@@ -178,78 +178,36 @@ resource "aws_instance" "worker" {
     mv repo/archivosWorker ./
     rm -rf repo
     
-    # Sustituir worker por version corregida (parseo de mensajes + entradas no numeradas)
-    python3 << 'PYEOF' > /home/ec2-user/archivosWorker/indirect_worker.py
-import pika
-import redis
-import os
-import sys
-import time
-
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
-QUEUE_NAME = 'booking_queue'
-
-max_reintentos = 12
-for i in range(max_reintentos):
-    try:
-        r = redis.Redis(host=REDIS_HOST, port=6379, password="admin123", decode_responses=True)
-        r.ping()
-        print(f"Conectado a Redis en {REDIS_HOST}")
-        break
-    except Exception as e:
-        print(f"Redis no responde. Reintentando en 5s... ({i+1}/{max_reintentos})")
-        time.sleep(5)
-else:
-    print("Imposible conectar a Redis. Apagando worker.")
-    sys.exit(1)
-
-for i in range(max_reintentos):
-    try:
-        credentials = pika.PlainCredentials('admin', 'admin123')
-        parameters = pika.ConnectionParameters(host=RABBITMQ_HOST, port=5672, virtual_host='/', credentials=credentials)
-        connection = pika.BlockingConnection(parameters)
-        channel = connection.channel()
-        channel.queue_declare(queue=QUEUE_NAME, durable=True)
-        channel.basic_qos(prefetch_count=100)
-        print(f"Conectado a RabbitMQ en {RABBITMQ_HOST}. Esperando trabajo...")
-        break
-    except:
-        print(f"RabbitMQ no responde. Reintentando en 5s... ({i+1}/{max_reintentos})")
-        time.sleep(5)
-else:
-    print("Imposible conectar a RabbitMQ. Apagando worker.")
-    sys.exit(1)
-
-def procesar_mensaje(ch, method, props, body):
+    # Parchear worker con version corregida (parseo de mensajes + entradas no numeradas)
+    python3 -c "
+import re
+c = open('/home/ec2-user/archivosWorker/indirect_worker.py').read()
+n = '''def procesar_mensaje(ch, method, props, body):
     peticion = body.decode().strip()
     partes = peticion.split()
-    if len(partes) < 2 or partes[0] != "BUY":
-        respuesta_http = "400"
+    if len(partes) < 2 or partes[0] != 'BUY':
+        respuesta_http = '400'
     elif len(partes) == 3:
         disponibles = r.decr('entradas_disponibles')
         if disponibles >= 0:
-            respuesta_http = "200"
+            respuesta_http = '200'
         else:
             r.incr('entradas_disponibles')
-            respuesta_http = "400"
+            respuesta_http = '400'
     elif len(partes) == 4:
         asiento = partes[2]
-        exito = r.setnx(f"asiento_{asiento}", "vendido")
-        respuesta_http = "200" if exito else "409"
+        exito = r.setnx(f'asiento_{asiento}', 'vendido')
+        respuesta_http = '200' if exito else '409'
     else:
-        respuesta_http = "400"
-    print(f"{peticion} -> {respuesta_http}")
+        respuesta_http = '400'
+    print(f'{peticion} -> {respuesta_http}')
     if props.reply_to and props.correlation_id:
         ch.basic_publish(exchange='', routing_key=props.reply_to, properties=pika.BasicProperties(correlation_id=props.correlation_id), body=respuesta_http)
-    ch.basic_ack(delivery_tag=method.delivery_tag)
-
-channel.basic_consume(queue=QUEUE_NAME, on_message_callback=procesar_mensaje)
-try:
-    channel.start_consuming()
-except KeyboardInterrupt:
-    connection.close()
-PYEOF
+    ch.basic_ack(delivery_tag=method.delivery_tag)'''
+c = re.sub(r'def procesar_mensaje.*?ch\.basic_ack\(delivery_tag=method\.delivery_tag\)', n, c, flags=re.DOTALL)
+open('/home/ec2-user/archivosWorker/indirect_worker.py', 'w').write(c)
+print('Worker corregido')
+"
     
     cd archivosWorker
     
@@ -296,15 +254,7 @@ resource "aws_instance" "client" {
     python3 -m venv venv && venv/bin/pip install pika redis aiohttp uvloop
     
     # Generar benchmark de alta contencion (80% en 5% asientos)
-    python3 << 'PYEOF'
-import random
-random.seed(42)
-with open('benchmarks/benchmark_numbered_hotspot.txt', 'w') as f:
-    for i in range(60000):
-        seat = random.randint(1, 1000) if i < 48000 else random.randint(1001, 20000)
-        f.write(f'BUY user{i+1:05d} {seat} {i+1:05d}\n')
-print('Benchmark hotspot generado: 48000/60000 en asientos 1-1000')
-PYEOF
+    python3 -c "import random;random.seed(42);f=open('benchmarks/benchmark_numbered_hotspot.txt','w');[f.write(f'BUY user{i+1:05d} {random.randint(1,1000) if i<48000 else random.randint(1001,20000)} {i+1:05d}\n') for i in range(60000)];print('Hotspot generado: 48000/60000 en asientos 1-1000')"
     
     # Guardamos las IPs para el cliente y el ulimit automático
     echo "export RABBITMQ_HOST=${aws_instance.rabbitmq.private_ip}" >> /home/ec2-user/.bashrc

@@ -262,15 +262,7 @@ resource "aws_instance" "client" {
     venv/bin/pip install aiohttp uvloop redis
     
     # Generar benchmark de alta contencion (80% en 5% asientos)
-    python3 << 'PYEOF'
-import random
-random.seed(42)
-with open('benchmarks/benchmark_numbered_hotspot.txt', 'w') as f:
-    for i in range(60000):
-        seat = random.randint(1, 1000) if i < 48000 else random.randint(1001, 20000)
-        f.write(f'BUY user{i+1:05d} {seat} {i+1:05d}\n')
-print('Benchmark hotspot generado: 48000/60000 en asientos 1-1000')
-PYEOF
+    python3 -c "import random;random.seed(42);f=open('benchmarks/benchmark_numbered_hotspot.txt','w');[f.write(f'BUY user{i+1:05d} {random.randint(1,1000) if i<48000 else random.randint(1001,20000)} {i+1:05d}\n') for i in range(60000)];print('Hotspot generado: 48000/60000 en asientos 1-1000')"
     
     # 3. Variables de entorno
     echo "export NGINX_HOST=${aws_instance.nginx.private_ip}" >> /home/ec2-user/.bashrc
