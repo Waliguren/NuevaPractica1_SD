@@ -26,24 +26,29 @@ else:
     sys.exit(1)
 
 # 2. Conexión a RabbitMQ con paciencia (Reintentos)
-for i in range(max_reintentos):
-    try:
-        credentials = pika.PlainCredentials('admin', 'admin123')
-        parameters = pika.ConnectionParameters(
-            host=RABBITMQ_HOST, port=5672, virtual_host='/', credentials=credentials
-        )
-        connection = pika.BlockingConnection(parameters)
-        channel = connection.channel()
-        channel.queue_declare(queue=QUEUE_NAME, durable=True)
-        channel.basic_qos(prefetch_count=100)
-        print(f"✅ Conectado a RabbitMQ en {RABBITMQ_HOST}. Esperando trabajo...")
-        break
-    except Exception as e:
-        print(f"⚠️ RabbitMQ no responde. Reintentando en 5 segundos... ({i+1}/{max_reintentos})")
-        time.sleep(5)
-else:
+def conectar_rabbitmq():
+    for i in range(max_reintentos):
+        try:
+            credentials = pika.PlainCredentials('admin', 'admin123')
+            # Aumentamos el heartbeat a 600s (10 minutos) para evitar cortes de conexión en AWS 
+            # cuando la red tiene micro-cortes o cuando el worker está inactivo por un tiempo.
+            parameters = pika.ConnectionParameters(
+                host=RABBITMQ_HOST, port=5672, virtual_host='/', credentials=credentials,
+                heartbeat=600, blocked_connection_timeout=300
+            )
+            connection = pika.BlockingConnection(parameters)
+            channel = connection.channel()
+            channel.queue_declare(queue=QUEUE_NAME, durable=True)
+            channel.basic_qos(prefetch_count=100)
+            print(f"✅ Conectado a RabbitMQ en {RABBITMQ_HOST}. Esperando trabajo...")
+            return connection, channel
+        except Exception as e:
+            print(f"⚠️ RabbitMQ no responde. Reintentando en 5 segundos... ({i+1}/{max_reintentos})")
+            time.sleep(5)
     print("❌ Imposible conectar a RabbitMQ. Apagando worker.")
     sys.exit(1)
+
+connection, channel = conectar_rabbitmq()
 
 # 3. La lógica central del Worker
 def procesar_mensaje(ch, method, props, body):
@@ -61,11 +66,21 @@ def procesar_mensaje(ch, method, props, body):
     # ----------------------------------------------------
     if not es_numerada:
         # LÓGICA NO NUMERADAS (Límite 20.000)
-        entradas_restantes = r.decr('entradas_disponibles')
-        if entradas_restantes >= 0:
+        # Usamos un script Lua para evitar el problema de bajar de 0 si hay mucha concurrencia
+        # o si el worker se desconecta entre el decr y el incr.
+        script = """
+        local disponibles = tonumber(redis.call('get', KEYS[1]) or '0')
+        if disponibles > 0 then
+            redis.call('decr', KEYS[1])
+            return 1
+        else
+            return 0
+        end
+        """
+        exito = r.eval(script, 1, 'entradas_disponibles')
+        if exito == 1:
             respuesta_http = "200"
         else:
-            r.incr('entradas_disponibles') # Devolvemos a 0
             respuesta_http = "409"
             
     # ----------------------------------------------------
@@ -96,10 +111,23 @@ def procesar_mensaje(ch, method, props, body):
     ch.basic_ack(delivery_tag=method.delivery_tag)
 
 # Arrancamos el bucle infinito
-channel.basic_consume(queue=QUEUE_NAME, on_message_callback=procesar_mensaje)
+def iniciar_consumo():
+    global connection, channel
+    while True:
+        try:
+            channel.basic_consume(queue=QUEUE_NAME, on_message_callback=procesar_mensaje)
+            channel.start_consuming()
+        except pika.exceptions.AMQPConnectionError as e:
+            print(f"⚠️ Conexión con RabbitMQ perdida ({e}). Reconectando en 5 segundos...")
+            time.sleep(5)
+            connection, channel = conectar_rabbitmq()
+        except KeyboardInterrupt:
+            print("\nApagando worker de forma segura...")
+            connection.close()
+            break
+        except Exception as e:
+            print(f"⚠️ Error inesperado ({e}). Reconectando en 5 segundos...")
+            time.sleep(5)
+            connection, channel = conectar_rabbitmq()
 
-try:
-    channel.start_consuming()
-except KeyboardInterrupt:
-    print("\nApagando worker de forma segura...")
-    connection.close()
+iniciar_consumo()
