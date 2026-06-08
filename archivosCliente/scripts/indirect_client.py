@@ -100,7 +100,8 @@ def main(archivo_benchmark):
     print(f"Cargando benchmark desde: {archivo_benchmark}...")
     try:
         with open(archivo_benchmark, 'r') as f:
-            peticiones = [line.strip() for line in f if line.strip()]
+            # Filtramos comentarios y líneas vacías, igual que hace el cliente directo
+            peticiones = [line.strip() for line in f if line.startswith("BUY")]
     except FileNotFoundError:
         print(f"❌ Error: No se encontró el archivo {archivo_benchmark}")
         sys.exit(1)
