@@ -21,8 +21,8 @@ class RpcClient(object):
         self.connection = pika.BlockingConnection(parameters)
         self.channel = self.connection.channel()
 
-        # 1. Declaramos la cola principal de trabajo
-        self.channel.queue_declare(queue=QUEUE_NAME, durable=True)
+        # 1. En la arquitectura mostrada en common.py, el cliente NO declara la cola principal.
+        # Asumimos que el worker (o la infraestructura) ya la ha creado.
 
         # 2. Creamos el buzón privado del cliente (cola exclusiva y temporal)
         result = self.channel.queue_declare(queue='', exclusive=True)

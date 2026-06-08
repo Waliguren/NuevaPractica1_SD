@@ -24,24 +24,14 @@ class NumberedRequest(BaseModel):
 # 2. Endpoint para entradas NO numeradas
 @app.post("/buy/unnumbered")
 async def buy_unnumbered(req: UnnumberedRequest):
-    # Usamos un script Lua para hacer la comprobación y el decremento de forma atómica.
-    # Así evitamos que el contador baje de 0 si hay peticiones concurrentes masivas.
-    script = """
-    local disponibles = tonumber(redis.call('get', KEYS[1]) or '0')
-    if disponibles > 0 then
-        redis.call('decr', KEYS[1])
-        return 1
-    else
-        return 0
-    end
-    """
-    exito = await r.eval(script, 1, 'entradas_disponibles')
+        # DECR resta 1 y nos devuelve el valor resultante (es atómico)
+    entradas_restantes = await r.decr('entradas_disponibles')
     
-    if exito == 1:
+    if entradas_restantes >= 0:
         return {"status": "success", "message": "Ticket purchased"}
     else:
-        # Lanzamos un error 400 para que el cliente sepa que ha fallado
-        raise HTTPException(status_code=400, detail="Sold out")
+        # Si bajamos de cero, lo volvemos a subir para no dejar basura en Redis
+        await r.incr('entradas_disponibles')
 
 # 3. Endpoint para entradas NUMERADAS
 @app.post("/buy/numbered")

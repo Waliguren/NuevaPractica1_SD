@@ -55,32 +55,36 @@ def procesar_mensaje(ch, method, props, body):
     peticion = body.decode()
     
     # 1. Detectar si es numerada o no numerada
+    asiento = None
     try:
+        # Intento de parsear JSON
         datos = json.loads(peticion)
-        # Si tiene seat_id es numerada, si no, es no numerada
         es_numerada = "seat_id" in datos
+        if es_numerada:
+            asiento = datos["seat_id"]
     except:
-        # Respaldo por si mandas texto crudo
-        es_numerada = "unnumbered" not in peticion.lower()
+        # Parseo de texto crudo (formato del benchmark)
+        parts = peticion.strip().split()
+        if len(parts) == 4 and parts[0] == "BUY":
+            # BUY client_id seat_id request_id
+            es_numerada = True
+            asiento = parts[2]
+        elif len(parts) == 3 and parts[0] == "BUY":
+            # BUY client_id request_id
+            es_numerada = False
+        else:
+            # Fallback muy básico si envías algo raro
+            es_numerada = "unnumbered" not in peticion.lower()
+            asiento = peticion.strip()
 
     # ----------------------------------------------------
     if not es_numerada:
         # LÓGICA NO NUMERADAS (Límite 20.000)
-        # Usamos un script Lua para evitar el problema de bajar de 0 si hay mucha concurrencia
-        # o si el worker se desconecta entre el decr y el incr.
-        script = """
-        local disponibles = tonumber(redis.call('get', KEYS[1]) or '0')
-        if disponibles > 0 then
-            redis.call('decr', KEYS[1])
-            return 1
-        else
-            return 0
-        end
-        """
-        exito = r.eval(script, 1, 'entradas_disponibles')
-        if exito == 1:
+        entradas_restantes = r.decr('entradas_disponibles')
+        if entradas_restantes >= 0:
             respuesta_http = "200"
         else:
+            r.incr('entradas_disponibles') # Devolvemos a 0
             respuesta_http = "409"
             
     # ----------------------------------------------------
