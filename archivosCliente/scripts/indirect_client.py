@@ -3,6 +3,7 @@ import time
 import uuid
 import os
 import sys
+import json
 
 # Variables de entorno inyectadas por Terraform
 RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
@@ -55,13 +56,13 @@ class RpcClient(object):
         if self.respuestas_recibidas == self.total_peticiones:
             self.channel.stop_consuming()
 
-    def disparar_y_esperar(self, peticiones):
-        self.total_peticiones = len(peticiones)
+    def disparar_y_esperar(self, payloads):
+        self.total_peticiones = len(payloads)
         print("¡Fuego! Inyectando mensajes en la cola...")
         start_time = time.time()
 
         # FASE 1: Inyección masiva
-        for peticion in peticiones:
+        for payload in payloads:
             self.channel.basic_publish(
                 exchange='',
                 routing_key=QUEUE_NAME,
@@ -70,7 +71,7 @@ class RpcClient(object):
                     correlation_id=str(uuid.uuid4()),       # ID único
                     delivery_mode=pika.spec.PERSISTENT_DELIVERY_MODE
                 ),
-                body=peticion
+                body=json.dumps(payload)
             )
         
         inyeccion_time = time.time() - start_time
@@ -92,7 +93,7 @@ class RpcClient(object):
         print("----------------------------------------")
         print("Desglose de respuestas (Confirmadas por Workers):")
         print(f"  ✅ [200 OK] Compras exitosas: {self.stats[200]}")
-        print(f"  ❌ [409 Conflict] Asiento ocupado: {self.stats[409]}")
+        print(f"  ❌ [409 Conflict] Asiento ocupado / Sold out: {self.stats[409]}")
         print(f"  ⚠️ Otros / Errores: {self.stats['errors']}")
         print("========================================")
 
@@ -100,16 +101,31 @@ def main(archivo_benchmark):
     print(f"Cargando benchmark desde: {archivo_benchmark}...")
     try:
         with open(archivo_benchmark, 'r') as f:
-            # Filtramos comentarios y líneas vacías, igual que hace el cliente directo
-            peticiones = [line.strip() for line in f if line.startswith("BUY")]
+            lines = [line.strip() for line in f if line.startswith("BUY")]
     except FileNotFoundError:
         print(f"❌ Error: No se encontró el archivo {archivo_benchmark}")
         sys.exit(1)
 
-    print(f"Se han cargado {len(peticiones)} peticiones.")
+    print(f"Se han cargado {len(lines)} líneas válidas.")
+    
+    payloads = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) == 3:
+            # No numerada
+            payload = {"client_id": parts[1], "request_id": parts[2]}
+        elif len(parts) == 4:
+            # Numerada
+            payload = {"client_id": parts[1], "seat_id": parts[2], "request_id": parts[3]}
+        else:
+            continue
+            
+        payloads.append(payload)
+
+    print(f"Preparados {len(payloads)} payloads JSON.")
     
     cliente_rpc = RpcClient()
-    cliente_rpc.disparar_y_esperar(peticiones)
+    cliente_rpc.disparar_y_esperar(payloads)
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
