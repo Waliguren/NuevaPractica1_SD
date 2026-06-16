@@ -1,4 +1,4 @@
-provider "aws" { 
+﻿provider "aws" { 
   region = "us-east-1" 
 }
 
@@ -134,7 +134,7 @@ resource "aws_instance" "redis" {
 }
 
 resource "aws_instance" "worker" {
-  count                  = 3
+  count                  = 4
   ami                    = data.aws_ami.amazon_linux.id
   instance_type          = "t3.micro"
   key_name               = "clave-rabbitmq-server"
@@ -154,6 +154,7 @@ resource "aws_instance" "worker" {
     echo "* hard nofile 65535" >> /etc/security/limits.conf
 
     # 2. Instalación de dependencias y código
+    while pidof dnf > /dev/null; do sleep 5; done
     dnf update -y
     dnf install -y python3 python3-pip git
     
@@ -170,9 +171,11 @@ resource "aws_instance" "worker" {
     echo "export REDIS_HOST=${aws_instance.redis.private_ip}" >> /home/ec2-user/.bashrc
     export REDIS_HOST=${aws_instance.redis.private_ip}
 
-    # 4. Aplicar el ulimit y arrancar la API
-    ulimit -n 65535
-    nohup venv/bin/uvicorn direct_worker:app --host 0.0.0.0 --port 5000 > worker.log 2>&1 &
+    # 4. Arrancar API y configurar reinicios con systemd de forma segura
+    sudo bash -c "echo -e '[Unit]\nDescription=Direct Worker FastAPI\nAfter=network.target\n\n[Service]\nType=simple\nUser=ec2-user\nWorkingDirectory=/home/ec2-user/archivosWorker\nEnvironment=REDIS_HOST=${aws_instance.redis.private_ip}\nExecStart=/home/ec2-user/archivosWorker/venv/bin/uvicorn direct_worker:app --host 0.0.0.0 --port 5000\nRestart=always\nRestartSec=5\nLimitNOFILE=65535\n\n[Install]\nWantedBy=multi-user.target' > /etc/systemd/system/direct-worker.service"
+    sudo systemctl daemon-reload
+    sudo systemctl enable direct-worker
+    sudo systemctl start direct-worker
   EOF
 }
 

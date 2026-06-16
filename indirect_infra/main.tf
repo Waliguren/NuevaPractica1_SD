@@ -154,7 +154,7 @@ resource "aws_instance" "rabbitmq" {
 }
 
 resource "aws_instance" "worker" {
-  count                  = 1
+  count                  = 4
   ami                    = data.aws_ami.amazon_linux.id
   instance_type          = "t3.micro"
   key_name               = "clave-rabbitmq-server"
@@ -194,8 +194,11 @@ resource "aws_instance" "worker" {
     
     python3 -m venv venv && venv/bin/pip install redis pika
     
-    ulimit -n 65535
-    nohup venv/bin/python3 indirect_worker.py > worker.log 2>&1 &
+    # Arrancar API y configurar reinicios con systemd de forma segura
+    sudo bash -c "echo -e '[Unit]\nDescription=Indirect Worker\nAfter=network.target\n\n[Service]\nType=simple\nUser=ec2-user\nWorkingDirectory=/home/ec2-user/archivosWorker\nEnvironment=REDIS_HOST=${aws_instance.redis.private_ip}\nEnvironment=RABBITMQ_HOST=${aws_instance.rabbitmq.private_ip}\nExecStart=/home/ec2-user/archivosWorker/venv/bin/python3 indirect_worker.py\nRestart=always\nRestartSec=5\nLimitNOFILE=65535\n\n[Install]\nWantedBy=multi-user.target' > /etc/systemd/system/indirect-worker.service"
+    sudo systemctl daemon-reload
+    sudo systemctl enable indirect-worker
+    sudo systemctl start indirect-worker
   EOF
 }
 
